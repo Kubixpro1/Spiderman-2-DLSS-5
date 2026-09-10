@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "app": {
+    "name": "Spider-Man 2 DLSS 5 Manager",
+    "version": "1.0.0",
+    "release_url": "https://github.com/Kubixpro1/Spiderman-2-DLSS-5/releases/latest",
+    "download_url": "https://github.com/Kubixpro1/Spiderman-2-DLSS-5/releases/latest",
+    "sha256": ""
+  }
+}
