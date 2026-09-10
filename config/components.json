@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "components": {
     "reshade": {
       "name": "ReShade 6.8.0 Add-on",
@@ -7,31 +7,35 @@
       "url": "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe",
       "sha256": "",
       "official": true,
-      "requires_authenticode": true
+      "requires_authenticode": true,
+      "kind": "exe"
     },
     "dlss_streamline": {
       "name": "DLSS 3.10.8.0 + Streamline 2.13",
       "version": "3.10.8.0-streamline-2.13",
-      "url": "",
+      "url": "https://cdn.discordapp.com/attachments/1543975158937821315/1543977625226182827/DLSS310.8.0-Streamline2.13.zip?ex=6aa403b7&is=6aa2b237&hm=e8309e81114238473664557b896bde2ef0bb9f7d8b54f6f2a66f2ea6bf6af02&",
       "sha256": "",
       "official": false,
-      "requires_authenticode": false
+      "requires_authenticode": false,
+      "kind": "zip"
     },
     "nvngx_dlssnr": {
       "name": "Patched nvngx_dlssnr.dll",
-      "version": "",
-      "url": "",
+      "version": "managed",
+      "url": "https://cdn.discordapp.com/attachments/1543976771920330884/1543982044797866107/nvngx_dlssnr.dll?ex=6aa407d5&is=6aa2b655&hm=2ba08e80f7f791bbcfc0880039e278a1cebbcb00b47365e669305b9686e6bf86&",
       "sha256": "",
       "official": false,
-      "requires_authenticode": false
+      "requires_authenticode": false,
+      "kind": "dll"
     },
     "renodx_dlss": {
       "name": "renodx-dlss.addon64",
-      "version": "",
-      "url": "",
+      "version": "managed",
+      "url": "https://cdn.discordapp.com/attachments/1545049227321810974/1545877902715920504/renodx-dlss.addon64?ex=6aa3ad3d&is=6aa25bbd&hm=e195687a64529ab6fb52d0eb35769a00a83579b295e3b5083b7432a5417a9485&",
       "sha256": "",
       "official": false,
-      "requires_authenticode": false
+      "requires_authenticode": false,
+      "kind": "addon"
     }
   }
 }
