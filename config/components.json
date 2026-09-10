@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "components": {
+    "reshade": {
+      "name": "ReShade 6.8.0 Add-on",
+      "version": "6.8.0",
+      "url": "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe",
+      "sha256": "",
+      "official": true,
+      "requires_authenticode": true
+    },
+    "dlss_streamline": {
+      "name": "DLSS 3.10.8.0 + Streamline 2.13",
+      "version": "3.10.8.0-streamline-2.13",
+      "url": "",
+      "sha256": "",
+      "official": false,
+      "requires_authenticode": false
+    },
+    "nvngx_dlssnr": {
+      "name": "Patched nvngx_dlssnr.dll",
+      "version": "",
+      "url": "",
+      "sha256": "",
+      "official": false,
+      "requires_authenticode": false
+    },
+    "renodx_dlss": {
+      "name": "renodx-dlss.addon64",
+      "version": "",
+      "url": "",
+      "sha256": "",
+      "official": false,
+      "requires_authenticode": false
+    }
+  }
+}
