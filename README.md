@@ -17,6 +17,8 @@ A Windows GUI manager for the **Marvel's Spider-Man 2** DLSS 5 / ReShade setup.
 - remote `config/components.json` so component URLs/versions can be changed without rebuilding the app
 - remote `config/version.json` for manager updates
 - self-update helper for the packaged EXE
+- PyArmor source obfuscation in release builds
+- Nuitka native compilation in release builds
 - GitHub Actions Windows EXE build and release workflow
 
 ## Repository
@@ -64,9 +66,31 @@ Hashes are intentionally blank until independently verified against the exact fi
 
 Once a file has been independently verified, put its lowercase SHA-256 in `config/components.json` or `config/version.json`.
 
+## Release build / protection
+
+Release builds use this pipeline:
+
+```text
+src/*.py
+   ↓
+PyArmor obfuscation
+   ↓
+Nuitka native compilation
+   ↓
+DLSS5Manager.exe
+   ↓
+SHA-256
+   ↓
+GitHub Release
+```
+
+PyArmor makes the Python source substantially harder to inspect, while Nuitka compiles the obfuscated application into a native Windows executable. This is defense-in-depth, not absolute protection against reverse engineering.
+
+The generated `obfuscated/`, `build/`, and `dist/` directories are ignored by Git and are not published as source artifacts.
+
 ## Building
 
-The GitHub Actions workflow builds a Windows executable with PyInstaller.
+The GitHub Actions workflow installs PyArmor and Nuitka, obfuscates the application, then compiles the obfuscated entry point with Nuitka. A tagged build creates `DLSS5Manager.exe` as a GitHub Release asset.
 
 Create a release by pushing a tag such as:
 
@@ -75,9 +99,7 @@ git tag v2.2.0
 git push origin v2.2.0
 ```
 
-The workflow creates `DLSS5Manager.exe` as a GitHub Release asset.
-
-For local development:
+For local development without the protected release pipeline:
 
 ```powershell
 py -m pip install pyinstaller
