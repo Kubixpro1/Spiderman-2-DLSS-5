@@ -1,747 +1,401 @@
-# Spider-Man 2 DLSS 5 Manager
-# See repository README.md for project information.
-
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
-import os
-import zipfile
-import shutil
-import urllib.request
-import urllib.error
-import subprocess
-import winreg
 import ctypes
-import tempfile
 import hashlib
 import json
-import time
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import winreg
+import zipfile
 from datetime import datetime
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+try:
+    from updater import apply_update
+except ImportError:
+    apply_update = None
 
 APP_NAME = "DLSS 5 Manager"
-APP_VERSION = "2.1"
+APP_VERSION = "2.2.0"
+CONFIG_BASE = "https://raw.githubusercontent.com/Kubixpro1/Spiderman-2-DLSS-5/main/config/"
+COMPONENTS_URL = CONFIG_BASE + "components.json"
+VERSION_URL = CONFIG_BASE + "version.json"
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_ZIP_FILES = 500
+MAX_ZIP_UNCOMPRESSED = 2 * 1024 * 1024 * 1024
 
-URL_RESHADE = "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe"
-URL_DLSS_ZIP = ("https://cdn.discordapp.com/attachments/1543975158937821315/1543977625226182827/"
-               "DLSS310.8.0-Streamline2.13.zip?ex=6aa403b7&is=6aa2b237&hm="
-               "e8309e81114238473664557b896bde2ef0bb9f7d8b54f6f2a66f2ea6bf6af02&")
-URL_DLSS_PATCH = ("https://cdn.discordapp.com/attachments/1543976771920330884/1543982044797866107/"
-                  "nvngx_dlssnr.dll?ex=6aa407d5&is=6aa2b655&hm="
-                  "2ba08e80f7f791bbcfc0880039e278a1cebbcb00b47365e669305b9686e6bf86&")
-URL_ADDON = ("https://cdn.discordapp.com/attachments/1545049227321810974/1545877902715920504/"
-             "renodx-dlss.addon64?ex=6aa3ad3d&is=6aa25bbd&hm="
-             "e195687a64529ab6fb52d0eb35769a00a83579b295e3b5083b7432a5417a9485&")
-
-EXPECTED_HASHES = {
-    "ReShade_Setup_6.8.0_Addon.exe": None,
-    "DLSS_Streamline.zip": None,
-    "nvngx_dlssnr.dll": None,
-    "renodx-dlss.addon64": None,
-}
-
-BG = "#0f0f0f"
-CARD = "#1a1a1a"
-BORDER = "#2a2a2a"
-ACCENT = "#e8003d"
-TEXT = "#f0f0f0"
-TEXT_DIM = "#888888"
-TEXT_MUTED = "#555555"
-GREEN = "#22c55e"
-AMBER = "#f59e0b"
-RED = "#ef4444"
+BG, CARD, BORDER = "#0f0f0f", "#1a1a1a", "#2a2a2a"
+ACCENT, TEXT, TEXT_DIM, TEXT_MUTED = "#e8003d", "#f0f0f0", "#888888", "#555555"
+GREEN, AMBER, RED = "#22c55e", "#f59e0b", "#ef4444"
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_BODY = ("Segoe UI", 10)
 FONT_SMALL = ("Segoe UI", 9)
 FONT_MONO = ("Consolas", 9)
 GAME_NAME = "Marvel's Spider-Man 2"
 
-
-def sha256_file(path, chunk_size=1024 * 1024):
-    digest = hashlib.sha256()
-    with open(path, "rb") as file:
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+FALLBACK_COMPONENTS = {
+    "reshade": {"name": "ReShade 6.8.0 Add-on", "version": "6.8.0", "url": "https://reshade.me/downloads/ReShade_Setup_6.8.0_Addon.exe", "sha256": "", "requires_authenticode": True, "kind": "exe"},
+    "dlss_streamline": {"name": "DLSS 3.10.8.0 + Streamline 2.13", "version": "3.10.8.0-streamline-2.13", "url": "https://cdn.discordapp.com/attachments/1543975158937821315/1543977625226182827/DLSS310.8.0-Streamline2.13.zip?ex=6aa403b7&is=6aa2b237&hm=e8309e81114238473664557b896bde2ef0bb9f7d8b54f6f2a66f2ea6bf6af02&", "sha256": "", "kind": "zip"},
+    "nvngx_dlssnr": {"name": "Patched nvngx_dlssnr.dll", "version": "managed", "url": "https://cdn.discordapp.com/attachments/1543976771920330884/1543982044797866107/nvngx_dlssnr.dll?ex=6aa407d5&is=6aa2b655&hm=2ba08e80f7f791bbcfc0880039e278a1cebbcb00b47365e669305b9686e6bf86&", "sha256": "", "kind": "dll"},
+    "renodx_dlss": {"name": "renodx-dlss.addon64", "version": "managed", "url": "https://cdn.discordapp.com/attachments/1545049227321810974/1545877902715920504/renodx-dlss.addon64?ex=6aa3ad3d&is=6aa25bbd&hm=e195687a64529ab6fb52d0eb35769a00a83579b295e3b5083b7432a5417a9485&", "sha256": "", "kind": "addon"},
+}
 
 
-def verify_hash(path, expected_hash):
-    if not expected_hash:
-        return None, "SHA-256 not configured."
-    actual = sha256_file(path)
-    if actual.lower() == expected_hash.lower():
-        return True, f"SHA-256 verified: {actual}"
-    return False, f"SHA-256 mismatch.\nExpected: {expected_hash}\nActual:   {actual}"
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def is_within_directory(base_dir, target_path):
-    base = os.path.abspath(base_dir)
-    target = os.path.abspath(target_path)
+def safe_path(base, target):
     try:
-        return os.path.commonpath([base, target]) == base
+        return os.path.commonpath([os.path.abspath(base), os.path.abspath(target)]) == os.path.abspath(base)
     except ValueError:
         return False
 
 
-def unique_backup_name(path):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{path}.backup_{timestamp}"
+def download_file(url, destination, progress=None):
+    if not url.startswith("https://"):
+        raise RuntimeError("Only HTTPS downloads are allowed.")
+    request = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    part = destination + ".part"
+    downloaded = 0
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response, open(part, "wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            if total > MAX_DOWNLOAD_BYTES:
+                raise RuntimeError("Remote file exceeds the download size limit.")
+            while chunk := response.read(256 * 1024):
+                downloaded += len(chunk)
+                if downloaded > MAX_DOWNLOAD_BYTES:
+                    raise RuntimeError("Download exceeded the size limit.")
+                out.write(chunk)
+                if progress and total:
+                    progress(min(100, int(downloaded * 100 / total)))
+        if downloaded == 0:
+            raise RuntimeError("Downloaded file is empty.")
+        os.replace(part, destination)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Network error: {e.reason}") from e
+    finally:
+        if os.path.exists(part):
+            try: os.remove(part)
+            except OSError: pass
+
+
+def fetch_json(url):
+    request = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def verify_hash(path, expected):
+    if not expected:
+        return None, "SHA-256 not configured in manifest."
+    actual = sha256_file(path)
+    return (True, f"SHA-256 verified: {actual}") if actual.lower() == expected.lower() else (False, f"SHA-256 mismatch. Expected {expected}, got {actual}")
+
+
+def verify_authenticode(path):
+    env = os.environ.copy(); env["DLSS_MANAGER_FILE"] = os.path.abspath(path)
+    ps = "$s=Get-AuthenticodeSignature -LiteralPath $env:DLSS_MANAGER_FILE; [string]$s.Status"
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, capture_output=True, text=True, timeout=20)
+        status = result.stdout.strip()
+        return status.lower() == "valid", f"Authenticode: {status or 'no status'}"
+    except Exception as e:
+        return False, f"Authenticode check failed: {e}"
 
 
 def detect_gpu_gen():
     try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5)
-        name = result.stdout.lower()
-        if any(x in name for x in ["rtx 50", "rtx50", "5050", "5060", "5070", "5080", "5090"]):
-            return "rtx50"
-        if any(x in name for x in ["rtx 40", "rtx40", "4050", "4060", "4070", "4080", "4090"]):
-            return "rtx40"
-        if any(x in name for x in ["rtx 30", "rtx30", "3050", "3060", "3070", "3080", "3090"]):
-            return "rtx30"
-        if any(x in name for x in ["rtx 20", "rtx20", "2060", "2070", "2080"]):
-            return "rtx20"
-    except Exception:
-        pass
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"], capture_output=True, text=True, timeout=5)
+        n = r.stdout.lower()
+        for gen, needles in (("rtx50", ("rtx 50", "5050", "5060", "5070", "5080", "5090")), ("rtx40", ("rtx 40", "4050", "4060", "4070", "4080", "4090")), ("rtx30", ("rtx 30", "3050", "3060", "3070", "3080", "3090")), ("rtx20", ("rtx 20", "2060", "2070", "2080"))):
+            if any(x in n for x in needles): return gen
+    except Exception: pass
     return None
 
 
-def get_steam_path():
-    locations = [
-        (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
-    ]
-    for hive, key_path in locations:
+def steam_path():
+    for hive, key in ((winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"), (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"), (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam")):
         try:
-            key = winreg.OpenKey(hive, key_path)
-            for value_name in ("SteamPath", "InstallPath"):
-                try:
-                    value = winreg.QueryValueEx(key, value_name)[0]
-                    if value and os.path.isdir(value):
-                        winreg.CloseKey(key)
-                        return os.path.normpath(value)
-                except FileNotFoundError:
-                    continue
-            winreg.CloseKey(key)
-        except Exception:
-            continue
+            with winreg.OpenKey(hive, key) as k:
+                for value in ("SteamPath", "InstallPath"):
+                    try:
+                        p = winreg.QueryValueEx(k, value)[0]
+                        if os.path.isdir(p): return os.path.normpath(p)
+                    except FileNotFoundError: pass
+        except OSError: pass
     return None
-
-
-def parse_steam_library_vdf(steam_path):
-    vdf_path = os.path.join(steam_path, "steamapps", "libraryfolders.vdf")
-    if not os.path.isfile(vdf_path):
-        return []
-    try:
-        with open(vdf_path, "r", encoding="utf-8", errors="ignore") as file:
-            content = file.read()
-        paths = re.findall(r'"path"\s*"([^"]+)"', content, flags=re.IGNORECASE)
-        result = []
-        for path in paths:
-            path = path.replace("\\\\", "\\")
-            if os.path.isdir(path):
-                result.append(os.path.normpath(path))
-        return result
-    except Exception:
-        return []
 
 
 def find_spiderman2():
-    steam_path = get_steam_path()
-    if not steam_path:
-        return None
-    libraries = list(dict.fromkeys([steam_path, *parse_steam_library_vdf(steam_path)]))
-    possible_names = ["Marvel's Spider-Man 2", "Marvels Spider-Man 2"]
-    for library in libraries:
-        common = os.path.join(library, "steamapps", "common")
-        for name in possible_names:
-            candidate = os.path.join(common, name)
-            if os.path.isdir(candidate):
-                return candidate
-    for library in libraries:
-        common = os.path.join(library, "steamapps", "common")
-        if not os.path.isdir(common):
-            continue
+    root = steam_path()
+    if not root: return None
+    libraries = [root]
+    vdf = os.path.join(root, "steamapps", "libraryfolders.vdf")
+    if os.path.isfile(vdf):
         try:
-            for entry in os.listdir(common):
-                if "spider" in entry.lower() and "man" in entry.lower():
-                    candidate = os.path.join(common, entry)
-                    if os.path.isdir(candidate):
-                        return candidate
-        except Exception:
-            continue
+            text = Path(vdf).read_text(encoding="utf-8", errors="ignore")
+            libraries += re.findall(r'"path"\s*"([^"]+)"', text)
+        except OSError: pass
+    for lib in dict.fromkeys(libraries):
+        common = os.path.join(lib.replace("\\\\", "\\"), "steamapps", "common")
+        if not os.path.isdir(common): continue
+        for name in ("Marvel's Spider-Man 2", "Marvels Spider-Man 2"):
+            candidate = os.path.join(common, name)
+            if os.path.isdir(candidate): return candidate
+        for entry in os.listdir(common):
+            if "spider" in entry.lower() and "man" in entry.lower() and os.path.isdir(os.path.join(common, entry)):
+                return os.path.join(common, entry)
     return None
 
 
-def download_file(url, destination, progress_callback=None):
-    request = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
-    })
-    part = destination + ".part"
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            with open(part, "wb") as file:
-                while True:
-                    chunk = response.read(256 * 1024)
-                    if not chunk:
-                        break
-                    file.write(chunk)
-                    downloaded += len(chunk)
-                    if total and progress_callback:
-                        progress_callback(int(downloaded / total * 100))
-        if not os.path.isfile(part) or os.path.getsize(part) == 0:
-            raise RuntimeError("Downloaded file is empty or missing.")
-        os.replace(part, destination)
-    except urllib.error.HTTPError as error:
-        if os.path.exists(part): os.remove(part)
-        raise RuntimeError(f"HTTP {error.code}: {error.reason}")
-    except urllib.error.URLError as error:
-        if os.path.exists(part): os.remove(part)
-        raise RuntimeError(f"Network error: {error.reason}")
-    except Exception as error:
-        if os.path.exists(part): os.remove(part)
-        raise RuntimeError(f"Download failed: {error}")
-
-
-def verify_windows_signature(path):
-    if not os.path.isfile(path):
-        return False, "File does not exist."
-    env = os.environ.copy()
-    env["DLSS_MANAGER_FILE"] = path
-    command = (
-        "$s = Get-AuthenticodeSignature -LiteralPath $env:DLSS_MANAGER_FILE; "
-        "Write-Output $s.Status"
-    )
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-            env=env, capture_output=True, text=True, timeout=15
-        )
-        status = result.stdout.strip().lower()
-        if status == "valid":
-            return True, "Authenticode signature: Valid"
-        if status:
-            return False, f"Authenticode signature: {status}"
-        return None, "Authenticode verification returned no status."
-    except Exception as error:
-        return None, f"Authenticode verification unavailable: {error}"
-
-
 def find_game_files(game_dir):
-    wanted = {x.lower() for x in {
-        "nvngx_dlss.dll", "nvngx_dlssnr.dll", "nvngx.dll", "sl.common.dll", "sl.dlss.dll",
-        "reshade.ini", "reshade.log", "renodx-dlss.addon64", "renodx-dlss5.addon64"
-    }}
+    wanted = {x.lower() for x in ("nvngx_dlss.dll", "nvngx_dlssnr.dll", "nvngx.dll", "sl.common.dll", "sl.dlss.dll", "reshade.ini", "reshade.log", "renodx-dlss.addon64", "renodx-dlss5.addon64", "dxgi.dll", "d3d12.dll")}
     found = {}
     for root, dirs, files in os.walk(game_dir):
         dirs[:] = [d for d in dirs if d.lower() != ".dlss_manager_backups"]
-        for filename in files:
-            if filename.lower() in wanted:
-                found.setdefault(filename.lower(), os.path.join(root, filename))
+        for name in files:
+            if name.lower() in wanted: found.setdefault(name.lower(), os.path.join(root, name))
     return found
+
+
+def safe_extract(zip_path, destination, log):
+    with zipfile.ZipFile(zip_path) as z:
+        members = [m for m in z.infolist() if not m.is_dir()]
+        if len(members) > MAX_ZIP_FILES: raise RuntimeError("Archive contains too many files.")
+        if sum(m.file_size for m in members) > MAX_ZIP_UNCOMPRESSED: raise RuntimeError("Archive is too large when unpacked.")
+        seen = set()
+        for m in members:
+            name = m.filename.replace("\\", "/")
+            base = os.path.basename(name)
+            if not base or base in seen: raise RuntimeError(f"Unsafe or duplicate archive entry: {m.filename}")
+            seen.add(base)
+            target = os.path.join(destination, base)
+            if not safe_path(destination, target): raise RuntimeError(f"Unsafe archive path: {m.filename}")
+        for m in members:
+            base = os.path.basename(m.filename.replace("\\", "/"))
+            target = os.path.join(destination, base)
+            with z.open(m) as src, open(target, "wb") as dst: shutil.copyfileobj(src, dst, 1024 * 1024)
+            log(f"Extracted: {base}")
 
 
 class DLSSManager(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} v{APP_VERSION} — Spider-Man 2")
-        self.geometry("820x760")
-        self.minsize(820, 760)
-        self.resizable(False, False)
-        self.configure(bg=BG)
-        self.gpu_gen = detect_gpu_gen()
+        self.geometry("820x760"); self.resizable(False, False); self.configure(bg=BG)
+        self.gpu = detect_gpu_gen(); self.running = False
         self.game_path = tk.StringVar(value=find_spiderman2() or "")
-        self.status_var = tk.StringVar(value="Ready.")
-        self.progress = tk.IntVar(value=0)
-        self.install_running = False
-        self._step_labels = []
-        self.status_labels = {}
-        self._configure_style()
-        self._build_ui()
-        self._refresh_gpu_badge()
-        self._refresh_installation_status()
+        self.status = tk.StringVar(value="Ready."); self.progress = tk.IntVar(value=0)
+        self.steps = {}; self.labels = {}
+        self.components = FALLBACK_COMPONENTS.copy(); self.remote_version = None
+        self.build_ui(); self.refresh_status()
+        self.after(500, self.check_updates)
 
-    def _configure_style(self):
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure("Red.Horizontal.TProgressbar", troughcolor=CARD, bordercolor=BORDER,
-                        background=ACCENT, lightcolor=ACCENT, darkcolor=ACCENT, thickness=8)
+    def button(self, parent, text, command):
+        return tk.Button(parent, text=text, font=FONT_SMALL, bg=CARD, fg=TEXT_DIM, activebackground=BORDER, activeforeground=TEXT, relief="flat", bd=0, padx=12, pady=8, command=command, cursor="hand2")
 
-    def _build_ui(self):
+    def ui(self, fn): self.after(0, fn)
+    def log(self, text): self.ui(lambda: (self.logbox.insert("end", f"[{datetime.now():%H:%M:%S}] {text}\n"), self.logbox.see("end")))
+    def set_status(self, text, color=TEXT_DIM): self.ui(lambda: (self.status.set(text), self.status_label.config(fg=color)))
+    def step(self, key, text, color): self.ui(lambda: self.steps[key].config(text=text, fg=color))
+    def prog(self, value): self.ui(lambda: self.progress.set(max(0, min(100, int(value)))))
+
+    def build_ui(self):
         tk.Frame(self, bg=ACCENT, height=4).pack(fill="x")
-        header = tk.Frame(self, bg=CARD, pady=15)
-        header.pack(fill="x")
-        tk.Label(header, text="DLSS 5 Manager", font=FONT_TITLE, bg=CARD, fg=TEXT).pack(side="left", padx=(24, 8))
-        tk.Label(header, text="Spider-Man 2", font=("Segoe UI", 11), bg=CARD, fg=TEXT_DIM).pack(side="left", pady=6)
-        self.gpu_badge = tk.Label(header, text="", font=FONT_SMALL, bg=CARD, fg=GREEN, padx=12)
-        self.gpu_badge.pack(side="right", padx=24)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-        body = tk.Frame(self, bg=BG, padx=24, pady=14)
-        body.pack(fill="both", expand=True)
+        header=tk.Frame(self,bg=CARD,pady=15); header.pack(fill="x")
+        tk.Label(header,text="DLSS 5 Manager",font=FONT_TITLE,bg=CARD,fg=TEXT).pack(side="left",padx=(24,8))
+        tk.Label(header,text="Spider-Man 2",font=("Segoe UI",11),bg=CARD,fg=TEXT_DIM).pack(side="left")
+        badge=f"● {self.gpu.replace('rtx','RTX ').upper()} Series" if self.gpu else "● GPU unknown"
+        tk.Label(header,text=badge,font=FONT_SMALL,bg=CARD,fg=GREEN if self.gpu else AMBER,padx=12).pack(side="right",padx=24)
+        body=tk.Frame(self,bg=BG,padx=24,pady=14); body.pack(fill="both",expand=True)
+        tk.Label(body,text="GAME DIRECTORY",font=("Segoe UI",8,"bold"),bg=BG,fg=TEXT_MUTED).pack(anchor="w")
+        row=tk.Frame(body,bg=BG,pady=4); row.pack(fill="x")
+        tk.Entry(row,textvariable=self.game_path,font=FONT_MONO,bg=CARD,fg=TEXT,insertbackground=TEXT,relief="flat",highlightthickness=1,highlightbackground=BORDER).pack(side="left",fill="x",expand=True,ipady=7,padx=(0,6))
+        self.button(row,"Browse",self.browse).pack(side="left",padx=2); self.button(row,"Auto-detect",self.autodetect).pack(side="left",padx=2)
+        self.button(row,"Check updates",self.check_updates).pack(side="left",padx=2)
+        tk.Label(body,text="INSTALLATION STATUS",font=("Segoe UI",8,"bold"),bg=BG,fg=TEXT_MUTED).pack(anchor="w",pady=(12,5))
+        card=tk.Frame(body,bg=CARD,highlightthickness=1,highlightbackground=BORDER); card.pack(fill="x")
+        for i,(key,name) in enumerate((("reshade","ReShade"),("dlss","DLSS / Streamline"),("patch","DLSS-NR patched DLL"),("addon","RenoDX DLSS addon"),("backup","Backup"))):
+            r=tk.Frame(card,bg=CARD); r.pack(fill="x",pady=4); tk.Label(r,text=name,font=FONT_BODY,bg=CARD,fg=TEXT,width=23,anchor="w").pack(side="left",padx=12)
+            l=tk.Label(r,text="Checking...",font=FONT_SMALL,bg=CARD,fg=TEXT_DIM); l.pack(side="right",padx=12); self.labels[key]=l
+            if i<4: tk.Frame(card,bg=BORDER,height=1).pack(fill="x")
+        tk.Label(body,text="INSTALLATION STEPS",font=("Segoe UI",8,"bold"),bg=BG,fg=TEXT_MUTED).pack(anchor="w",pady=(12,5))
+        steps_frame=tk.Frame(body,bg=CARD,highlightthickness=1,highlightbackground=BORDER); steps_frame.pack(fill="x")
+        for i,(key,text) in enumerate((("backup","Create backup"),("reshade","Download & safely launch ReShade"),("dlss","Install DLSS + Streamline"),("patch","Install patched DLSS-NR DLL"),("addon","Install RenoDX DLSS addon"),("verify","Verify installation")),1):
+            r=tk.Frame(steps_frame,bg=CARD); r.pack(fill="x"); tk.Label(r,text=str(i),font=("Segoe UI",9,"bold"),bg=ACCENT,fg="white",width=3,pady=7).pack(side="left"); tk.Label(r,text=text,font=FONT_BODY,bg=CARD,fg=TEXT,anchor="w").pack(side="left",padx=12,fill="x",expand=True)
+            l=tk.Label(r,text="—",font=FONT_SMALL,bg=CARD,fg=TEXT_MUTED,padx=12); l.pack(side="right"); self.steps[key]=l
+            if i<6: tk.Frame(steps_frame,bg=BORDER,height=1).pack(fill="x")
+        tk.Label(body,text="PROGRESS",font=("Segoe UI",8,"bold"),bg=BG,fg=TEXT_MUTED).pack(anchor="w",pady=(12,4))
+        ttk.Style(self).configure("Red.Horizontal.TProgressbar",troughcolor=CARD,background=ACCENT,lightcolor=ACCENT,darkcolor=ACCENT,thickness=8)
+        ttk.Progressbar(body,variable=self.progress,maximum=100,style="Red.Horizontal.TProgressbar").pack(fill="x")
+        self.status_label=tk.Label(body,textvariable=self.status,font=FONT_MONO,bg=BG,fg=TEXT_DIM,anchor="w"); self.status_label.pack(fill="x",pady=4)
+        tk.Label(body,text="LOG",font=("Segoe UI",8,"bold"),bg=BG,fg=TEXT_MUTED).pack(anchor="w",pady=(4,3))
+        lf=tk.Frame(body,bg=CARD,highlightthickness=1,highlightbackground=BORDER); lf.pack(fill="both",expand=True)
+        self.logbox=tk.Text(lf,height=6,bg=CARD,fg=TEXT_DIM,font=FONT_MONO,relief="flat",wrap="word"); self.logbox.pack(fill="both",expand=True,padx=6,pady=6)
+        bottom=tk.Frame(self,bg=CARD,pady=10,padx=24); bottom.pack(fill="x")
+        self.install_btn=tk.Button(bottom,text="INSTALL / UPDATE",font=("Segoe UI",10,"bold"),bg=ACCENT,fg="white",activebackground="#c0002e",relief="flat",bd=0,padx=18,pady=9,command=self.start_install); self.install_btn.pack(side="right")
+        self.button(bottom,"Restore backup",self.restore_backup).pack(side="right",padx=6); self.button(bottom,"Verify",self.verify_clicked).pack(side="right",padx=6); self.button(bottom,"Open folder",self.open_folder).pack(side="left")
 
-        tk.Label(body, text="GAME DIRECTORY", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXT_MUTED).pack(anchor="w")
-        path_row = tk.Frame(body, bg=BG, pady=4)
-        path_row.pack(fill="x")
-        self.path_entry = tk.Entry(path_row, textvariable=self.game_path, font=FONT_MONO, bg=CARD, fg=TEXT,
-                                   insertbackground=TEXT, relief="flat", bd=0, highlightthickness=1,
-                                   highlightbackground=BORDER, highlightcolor=ACCENT)
-        self.path_entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 6))
-        self._button(path_row, "Browse", self._browse).pack(side="left", padx=2)
-        self._button(path_row, "Auto-detect", self._autodetect).pack(side="left", padx=2)
-
-        tk.Label(body, text="INSTALLATION STATUS", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXT_MUTED).pack(anchor="w", pady=(12, 5))
-        status_card = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-        status_card.pack(fill="x")
-        status_items = [("reshade", "ReShade"), ("dlss", "DLSS / Streamline"), ("patch", "DLSS-NR patched DLL"),
-                        ("addon", "RenoDX DLSS addon"), ("backup", "Backup")]
-        for index, (key, name) in enumerate(status_items):
-            row = tk.Frame(status_card, bg=CARD)
-            row.pack(fill="x", pady=4)
-            tk.Label(row, text=name, font=FONT_BODY, bg=CARD, fg=TEXT, width=23, anchor="w").pack(side="left", padx=12)
-            status = tk.Label(row, text="Checking...", font=FONT_SMALL, bg=CARD, fg=TEXT_DIM, anchor="e")
-            status.pack(side="right", padx=12)
-            self.status_labels[key] = status
-            if index < len(status_items) - 1:
-                tk.Frame(status_card, bg=BORDER, height=1).pack(fill="x")
-
-        tk.Label(body, text="INSTALLATION STEPS", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXT_MUTED).pack(anchor="w", pady=(12, 5))
-        steps_frame = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-        steps_frame.pack(fill="x")
-        steps = [("1", "Create backup", "backup"), ("2", "Download & safely launch ReShade", "reshade"),
-                 ("3", "Install DLSS + Streamline", "dlss"), ("4", "Install patched DLSS-NR DLL", "patch"),
-                 ("5", "Install RenoDX DLSS addon", "addon"), ("6", "Verify installation", "verify")]
-        for index, (number, text, key) in enumerate(steps):
-            row = tk.Frame(steps_frame, bg=CARD)
-            row.pack(fill="x")
-            tk.Label(row, text=number, font=("Segoe UI", 9, "bold"), bg=ACCENT, fg="white", width=3, pady=7).pack(side="left")
-            tk.Label(row, text=text, font=FONT_BODY, bg=CARD, fg=TEXT, anchor="w").pack(side="left", padx=12, fill="x", expand=True)
-            status = tk.Label(row, text="—", font=FONT_SMALL, bg=CARD, fg=TEXT_MUTED, padx=12)
-            status.pack(side="right")
-            self._step_labels.append((key, status))
-            if index < len(steps) - 1:
-                tk.Frame(steps_frame, bg=BORDER, height=1).pack(fill="x")
-
-        tk.Label(body, text="PROGRESS", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXT_MUTED).pack(anchor="w", pady=(12, 4))
-        self.pbar = ttk.Progressbar(body, variable=self.progress, maximum=100, style="Red.Horizontal.TProgressbar")
-        self.pbar.pack(fill="x")
-        self.status_lbl = tk.Label(body, textvariable=self.status_var, font=FONT_MONO, bg=BG, fg=TEXT_DIM, anchor="w")
-        self.status_lbl.pack(fill="x", pady=(4, 2))
-
-        tk.Label(body, text="LOG", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXT_MUTED).pack(anchor="w", pady=(5, 3))
-        log_frame = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-        log_frame.pack(fill="both", expand=True)
-        self.log_text = tk.Text(log_frame, height=6, bg=CARD, fg=TEXT_DIM, insertbackground=TEXT, font=FONT_MONO,
-                                relief="flat", bd=0, wrap="word")
-        self.log_text.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.log_text.configure(yscrollcommand=scrollbar.set)
-
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-        bottom = tk.Frame(self, bg=CARD, pady=10, padx=24)
-        bottom.pack(fill="x")
-        self.install_btn = tk.Button(bottom, text="INSTALL / UPDATE", font=("Segoe UI", 10, "bold"), bg=ACCENT,
-                                     fg="white", activebackground="#c0002e", activeforeground="white", relief="flat",
-                                     bd=0, padx=18, pady=9, cursor="hand2", command=self._start_install)
-        self.install_btn.pack(side="right")
-        self.restore_btn = self._button(bottom, "Restore backup", self._restore_backup)
-        self.restore_btn.pack(side="right", padx=(0, 6))
-        self.verify_btn = self._button(bottom, "Verify", self._verify_clicked)
-        self.verify_btn.pack(side="right", padx=(0, 6))
-        self._button(bottom, "Open folder", self._open_folder).pack(side="left")
-
-    def _button(self, parent, text, command):
-        return tk.Button(parent, text=text, font=FONT_SMALL, bg=CARD, fg=TEXT_DIM, activebackground=BORDER,
-                          activeforeground=TEXT, relief="flat", bd=0, padx=12, pady=8, cursor="hand2", command=command)
-
-    def _log(self, message):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"[{timestamp}] {message}"
-        self.after(0, lambda: self._append_log(line))
-
-    def _append_log(self, line):
-        self.log_text.insert("end", line + "\n")
-        self.log_text.see("end")
-
-    def _set_status(self, message, color=TEXT_DIM):
-        self.after(0, lambda: (self.status_var.set(message), self.status_lbl.config(fg=color)))
-
-    def _set_step(self, key, text, color):
-        def update():
-            for step_key, label in self._step_labels:
-                if step_key == key:
-                    label.config(text=text, fg=color)
-        self.after(0, update)
-
-    def _set_progress(self, value):
-        self.after(0, lambda: self.progress.set(max(0, min(100, int(value)))))
-
-    def _refresh_gpu_badge(self):
-        if self.gpu_gen:
-            generation = self.gpu_gen.replace("rtx", "RTX ").upper()
-            self.gpu_badge.config(text=f"● {generation} Series", fg=GREEN)
-        else:
-            self.gpu_badge.config(text="● GPU unknown", fg=AMBER)
-
-    def _browse(self):
-        path = filedialog.askdirectory(title="Select Spider-Man 2 game folder")
-        if path:
-            self.game_path.set(path)
-            self._refresh_installation_status()
-
-    def _autodetect(self):
-        found = find_spiderman2()
-        if found:
-            self.game_path.set(found)
-            self._set_status(f"Found: {found}", GREEN)
-            self._log(f"Game detected: {found}")
-            self._refresh_installation_status()
-        else:
-            self._set_status("Spider-Man 2 was not found.", AMBER)
-            self._log("Spider-Man 2 was not found.")
-
-    def _open_folder(self):
-        path = self.game_path.get().strip()
-        if path and os.path.isdir(path):
-            os.startfile(path)
-        else:
-            self._set_status("Set a valid game path first.", RED)
-
-    def _refresh_installation_status(self):
-        game_dir = self.game_path.get().strip()
-        if not game_dir or not os.path.isdir(game_dir):
-            for label in self.status_labels.values():
-                label.config(text="Game path not set", fg=TEXT_MUTED)
-            return
-        files = find_game_files(game_dir)
-        reshade = "reshade.ini" in files or "reshade.log" in files
-        dlss = any(item in files for item in ["nvngx_dlss.dll", "nvngx.dll", "sl.common.dll", "sl.dlss.dll"])
-        patch = "nvngx_dlssnr.dll" in files
-        addon = "renodx-dlss.addon64" in files
-        backup_dir = os.path.join(game_dir, ".dlss_manager_backups")
-        backup = os.path.isdir(backup_dir)
-        self._set_status_item("reshade", reshade, "Installed", "Not detected")
-        self._set_status_item("dlss", dlss, "Detected", "Not detected")
-        self._set_status_item("patch", patch, "Detected", "Not detected")
-        self._set_status_item("addon", addon, "Installed", "Not detected")
-        self._set_status_item("backup", backup, "Available", "No backup")
-
-    def _set_status_item(self, key, condition, true_text, false_text):
-        label = self.status_labels[key]
-        label.config(text=f"✓ {true_text}" if condition else f"— {false_text}", fg=GREEN if condition else TEXT_MUTED)
-
-    def _create_backup(self, game_dir):
-        backup_root = os.path.join(game_dir, ".dlss_manager_backups")
-        os.makedirs(backup_root, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join(backup_root, timestamp)
-        os.makedirs(backup_dir, exist_ok=True)
-        files = find_game_files(game_dir)
-        backed_up = []
-        for path in files.values():
-            if backup_root.lower() in path.lower():
-                continue
-            relative = os.path.relpath(path, game_dir)
-            destination = os.path.join(backup_dir, relative)
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
-            shutil.copy2(path, destination)
-            backed_up.append(relative)
-            self._log(f"Backup: {relative}")
-        metadata = {"created": datetime.now().isoformat(), "game_directory": game_dir,
-                    "files": backed_up, "gpu": self.gpu_gen, "manager_version": APP_VERSION}
-        with open(os.path.join(backup_dir, "backup.json"), "w", encoding="utf-8") as file:
-            json.dump(metadata, file, indent=2)
-        self._log(f"Backup created: {backup_dir}")
-        return backup_dir
-
-    def _find_latest_backup(self, game_dir):
-        root = os.path.join(game_dir, ".dlss_manager_backups")
-        if not os.path.isdir(root):
-            return None
-        directories = [os.path.join(root, name) for name in os.listdir(root)
-                       if os.path.isdir(os.path.join(root, name))]
-        return max(directories, key=os.path.getmtime) if directories else None
-
-    def _restore_backup(self):
-        if self.install_running:
-            return
-        game_dir = self.game_path.get().strip()
-        if not game_dir or not os.path.isdir(game_dir):
-            messagebox.showerror("Invalid path", "Set a valid Spider-Man 2 directory first.")
-            return
-        backup = self._find_latest_backup(game_dir)
-        if not backup:
-            messagebox.showinfo("No backup", "No DLSS Manager backup was found.")
-            return
-        if not messagebox.askyesno("Restore backup", f"Restore the latest backup?\n\n{backup}\n\nCurrent modified files may be replaced."):
-            return
+    def load_components(self):
         try:
-            for root, dirs, files in os.walk(backup):
-                for filename in files:
-                    if filename == "backup.json":
-                        continue
-                    source = os.path.join(root, filename)
-                    relative = os.path.relpath(source, backup)
-                    destination = os.path.join(game_dir, relative)
-                    if not is_within_directory(game_dir, destination):
-                        raise RuntimeError(f"Unsafe restore path: {relative}")
-                    os.makedirs(os.path.dirname(destination), exist_ok=True)
-                    shutil.copy2(source, destination)
-                    self._log(f"Restored: {relative}")
-            self._set_status("Backup restored successfully.", GREEN)
-            self._refresh_installation_status()
-            messagebox.showinfo("Restore complete", "The latest backup has been restored.")
-        except Exception as error:
-            self._log(f"Restore error: {error}")
-            messagebox.showerror("Restore failed", str(error))
+            data=fetch_json(COMPONENTS_URL); components=data.get("components",{})
+            for key in FALLBACK_COMPONENTS:
+                if key in components and components[key].get("url"): self.components[key]={**FALLBACK_COMPONENTS[key],**components[key]}
+            self.log("Loaded remote components.json")
+        except Exception as e: self.log(f"Remote component manifest unavailable; using built-in fallback: {e}")
 
-    def _download_and_verify(self, url, destination, expected_hash, progress_callback):
-        filename = os.path.basename(destination)
-        self._log(f"Downloading {filename}")
-        download_file(url, destination, progress_callback)
-        hash_result, hash_message = verify_hash(destination, expected_hash)
-        self._log(hash_message)
-        if hash_result is False:
-            raise RuntimeError(f"SHA-256 verification failed for {filename}.")
-        return hash_result
+    def check_updates(self):
+        def worker():
+            try:
+                data=fetch_json(VERSION_URL); remote=data.get("app",{}); self.remote_version=remote.get("version")
+                if self.remote_version and self.remote_version != APP_VERSION:
+                    msg=f"A manager update is available: {APP_VERSION} → {self.remote_version}.\n\nUpdate now?"
+                    if self.ask("Update available",msg):
+                        if not apply_update: raise RuntimeError("Updater module is unavailable in this build.")
+                        apply_update(remote.get("download_url",""),remote.get("sha256") or None)
+                        self.log("Update downloaded. Restarting..."); self.after(500,self.destroy)
+                else: self.set_status("Manager is up to date.",GREEN)
+            except Exception as e: self.log(f"Update check: {e}")
+        threading.Thread(target=worker,daemon=True).start()
 
-    def _install_reshade_safely(self, game_dir, reshade_exe):
-        self._set_step("reshade", "checking signature...", AMBER)
-        self._set_status("Checking ReShade installer signature...")
-        signature_valid, signature_message = verify_windows_signature(reshade_exe)
-        self._log(signature_message)
-        if signature_valid is not True:
-            raise RuntimeError("ReShade installer signature could not be confirmed as valid.\n\n"
-                               f"{signature_message}\n\nFor safety, the installer was NOT executed.")
-        confirmed = self._ask_main_thread("Run ReShade installer?",
-            "The ReShade installer passed Windows Authenticode verification.\n\n"
-            "The installer will now open and you must select the Spider-Man 2 executable.\n\n"
-            "The manager will wait until ReShade closes.\n\nContinue?")
-        if not confirmed:
-            raise RuntimeError("User cancelled the ReShade installer.")
-        self._set_step("reshade", "waiting...", AMBER)
-        self._set_status("ReShade installer running...")
-        self._log("Launching verified ReShade installer.")
-        process = subprocess.Popen([reshade_exe], cwd=os.path.dirname(reshade_exe), shell=False)
-        return_code = process.wait()
-        self._log(f"ReShade installer exited with code {return_code}.")
-        if return_code != 0:
-            raise RuntimeError(f"ReShade installer exited with an error.\nExit code: {return_code}")
-        time.sleep(1)
-        files = find_game_files(game_dir)
-        self._set_step("reshade", "✓ installed" if ("reshade.ini" in files or "reshade.log" in files) else "✓ installer finished", GREEN)
-        self._set_progress(30)
+    def ask(self,title,text):
+        result={"v":False}; event=threading.Event()
+        self.after(0,lambda:(result.__setitem__("v",messagebox.askyesno(title,text,parent=self)),event.set()))
+        event.wait(); return result["v"]
 
-    def _ask_main_thread(self, title, message):
-        result = {"value": False}
-        event = threading.Event()
-        def ask():
-            result["value"] = messagebox.askyesno(title, message, parent=self)
-            event.set()
-        self.after(0, ask)
-        event.wait()
-        return result["value"]
+    def browse(self):
+        p=filedialog.askdirectory(title="Select Spider-Man 2 game folder")
+        if p: self.game_path.set(p); self.refresh_status()
+    def autodetect(self):
+        p=find_spiderman2()
+        if p: self.game_path.set(p); self.set_status(f"Found: {p}",GREEN); self.refresh_status()
+        else: self.set_status("Spider-Man 2 was not found.",AMBER)
+    def open_folder(self):
+        p=self.game_path.get().strip()
+        if os.path.isdir(p): os.startfile(p)
+        else: messagebox.showerror("Invalid path","Set a valid game path first.")
 
-    def _extract_zip(self, zip_path, destination):
-        self._log(f"Extracting {os.path.basename(zip_path)}")
-        with zipfile.ZipFile(zip_path, "r") as archive:
-            members = [m for m in archive.infolist() if not m.is_dir()]
-            if len(members) > 200:
-                raise RuntimeError("Archive contains too many files.")
-            total_size = sum(m.file_size for m in members)
-            if total_size > 512 * 1024 * 1024:
-                raise RuntimeError("Archive uncompressed size is too large.")
-            seen = set()
-            for member in members:
-                normalized = member.filename.replace("\\", "/")
-                filename = os.path.basename(normalized)
-                if not filename or filename in {".", ".."} or "\x00" in filename:
-                    continue
-                if filename.lower() in seen:
-                    raise RuntimeError(f"Duplicate archive filename: {filename}")
-                seen.add(filename.lower())
-                target = os.path.join(destination, filename)
-                if not is_within_directory(destination, target):
-                    raise RuntimeError(f"Unsafe archive path: {member.filename}")
-                with archive.open(member) as source, open(target, "wb") as dest:
-                    shutil.copyfileobj(source, dest)
-                self._log(f"Extracted: {filename}")
-
-    def _start_install(self):
-        if self.install_running:
+    def refresh_status(self):
+        p=self.game_path.get().strip()
+        if not os.path.isdir(p):
+            for l in self.labels.values(): l.config(text="Game path not set",fg=TEXT_MUTED)
             return
-        game_dir = self.game_path.get().strip()
-        if not game_dir:
-            messagebox.showerror("No path", "Set the Spider-Man 2 game directory first.")
-            return
-        if not os.path.isdir(game_dir):
-            messagebox.showerror("Invalid path", f"Directory not found:\n{game_dir}")
-            return
-        if not messagebox.askyesno("Install / Update",
-            "A backup will be created before any game files are changed.\n\n"
-            "The ReShade installer will require your confirmation before it is executed.\n\nContinue?"):
-            return
-        self.install_running = True
-        self.install_btn.config(state="disabled", text="INSTALLING...")
-        self.restore_btn.config(state="disabled")
-        self.verify_btn.config(state="disabled")
-        self.progress.set(0)
-        threading.Thread(target=self._install_thread, args=(game_dir,), daemon=True).start()
+        f=find_game_files(p)
+        checks={"reshade":("✓ Installed" if "reshade.ini" in f or "reshade.log" in f or "dxgi.dll" in f or "d3d12.dll" in f else "— Not detected"),"dlss":("✓ Detected" if any(x in f for x in ("nvngx_dlss.dll","nvngx.dll","sl.common.dll","sl.dlss.dll")) else "— Not detected"),"patch":("✓ Detected" if "nvngx_dlssnr.dll" in f else "— Not detected"),"addon":("✓ Installed" if "renodx-dlss.addon64" in f else "— Not detected"),"backup":("✓ Available" if os.path.isdir(os.path.join(p,".dlss_manager_backups")) else "— No backup")}
+        for k,v in checks.items(): self.labels[k].config(text=v,fg=GREEN if v.startswith("✓") else TEXT_MUTED)
 
-    def _install_thread(self, game_dir):
-        temporary_dir = tempfile.mkdtemp(prefix="dlss5_mgr_")
+    def create_backup(self,p):
+        root=os.path.join(p,".dlss_manager_backups"); stamp=datetime.now().strftime("%Y%m%d_%H%M%S"); out=os.path.join(root,stamp); os.makedirs(out,exist_ok=True)
+        files=find_game_files(p); manifest={"created":datetime.now().isoformat(),"game_directory":p,"files":[]}
+        for src in files.values():
+            if not safe_path(p,src): continue
+            rel=os.path.relpath(src,p); dst=os.path.join(out,rel); os.makedirs(os.path.dirname(dst),exist_ok=True); shutil.copy2(src,dst); manifest["files"].append(rel)
+        with open(os.path.join(out,"backup.json"),"w",encoding="utf-8") as f: json.dump(manifest,f,indent=2)
+        self.log(f"Backup created: {out}"); return out
+
+    def latest_backup(self,p):
+        root=os.path.join(p,".dlss_manager_backups")
+        dirs=[os.path.join(root,x) for x in os.listdir(root)] if os.path.isdir(root) else []
+        dirs=[x for x in dirs if os.path.isdir(x)]
+        return max(dirs,key=os.path.getmtime) if dirs else None
+
+    def restore_backup(self):
+        p=self.game_path.get().strip(); b=self.latest_backup(p) if os.path.isdir(p) else None
+        if not b: messagebox.showinfo("No backup","No DLSS Manager backup was found."); return
+        if not messagebox.askyesno("Restore backup",f"Restore the latest backup?\n\n{b}"): return
         try:
-            self._run_install(game_dir, temporary_dir)
-        except Exception as error:
-            self._log(f"INSTALLATION ERROR: {error}")
-            self._set_status(f"Error: {error}", RED)
-            self.after(0, lambda: messagebox.showerror("Install failed", str(error)))
+            for root,_,files in os.walk(b):
+                for name in files:
+                    if name=="backup.json": continue
+                    src=os.path.join(root,name); rel=os.path.relpath(src,b); dst=os.path.join(p,rel)
+                    if not safe_path(p,dst): raise RuntimeError("Unsafe restore path.")
+                    os.makedirs(os.path.dirname(dst),exist_ok=True); shutil.copy2(src,dst)
+            self.set_status("Backup restored.",GREEN); self.refresh_status()
+        except Exception as e: messagebox.showerror("Restore failed",str(e))
+
+    def download_component(self,key,tmp,progress):
+        c=self.components[key]; name={"reshade":"ReShade_Setup_6.8.0_Addon.exe","dlss_streamline":"DLSS_Streamline.zip","nvngx_dlssnr":"nvngx_dlssnr.dll","renodx_dlss":"renodx-dlss.addon64"}[key]; path=os.path.join(tmp,name)
+        if not c.get("url"): raise RuntimeError(f"No URL configured for {c.get('name',key)}")
+        download_file(c["url"],path,progress)
+        expected=c.get("sha256") or ""; ok,msg=verify_hash(path,expected); self.log(msg)
+        if ok is False: raise RuntimeError(msg)
+        if c.get("requires_authenticode"):
+            valid,msg=verify_authenticode(path); self.log(msg)
+            if not valid: raise RuntimeError("ReShade installer did not pass Authenticode verification.")
+        with open(path,"rb") as f: magic=f.read(4)
+        if c.get("kind") in ("exe","dll","addon") and magic[:2] != b"MZ": raise RuntimeError(f"{name} is not a valid Windows PE file.")
+        if c.get("kind")=="zip" and magic[:2] != b"PK": raise RuntimeError("DLSS archive is not a ZIP file.")
+        return path
+
+    def start_install(self):
+        if self.running:return
+        p=self.game_path.get().strip()
+        if not os.path.isdir(p): messagebox.showerror("Invalid path","Set a valid Spider-Man 2 directory first."); return
+        if not self.ask("Install / Update","A backup will be created. ReShade will only run after Authenticode verification and your confirmation. Continue?"): return
+        self.running=True; self.install_btn.config(state="disabled",text="INSTALLING..."); self.progress.set(0)
+        threading.Thread(target=self.install_worker,args=(p,),daemon=True).start()
+
+    def install_worker(self,p):
+        tmp=tempfile.mkdtemp(prefix="dlss5_mgr_")
+        try:
+            self.load_components(); self.step("backup","creating...",AMBER); self.create_backup(p); self.step("backup","✓ created",GREEN); self.prog(10)
+            self.step("reshade","downloading...",AMBER); reshade=self.download_component("reshade",tmp,lambda x:self.prog(10+int(x*.15)))
+            if not self.ask("Run ReShade installer?","Authenticode verification passed.\n\nReShade will open and you must select the Spider-Man 2 executable.\n\nContinue?"):
+                raise RuntimeError("ReShade installer cancelled by user.")
+            self.log("Launching verified ReShade installer and waiting for it to close.")
+            proc=subprocess.Popen([reshade],cwd=os.path.dirname(reshade),shell=False); code=proc.wait()
+            if code!=0: raise RuntimeError(f"ReShade installer exited with code {code}.")
+            time.sleep(1); self.step("reshade","✓ installer finished",GREEN); self.prog(30)
+            files=find_game_files(p); dest=p
+            for n in ("nvngx_dlss.dll","nvngx.dll","sl.common.dll","sl.dlss.dll"):
+                if n in files: dest=os.path.dirname(files[n]); break
+            self.step("dlss","downloading...",AMBER); archive=self.download_component("dlss_streamline",tmp,lambda x:self.prog(30+int(x*.20))); safe_extract(archive,dest,self.log); self.step("dlss","✓ installed",GREEN); self.prog(55)
+            self.step("patch","downloading...",AMBER); patch=self.download_component("nvngx_dlssnr",tmp,lambda x:self.prog(55+int(x*.15))); shutil.copy2(patch,os.path.join(dest,"nvngx_dlssnr.dll")); self.step("patch","✓ installed",GREEN); self.prog(70)
+            self.step("addon","downloading...",AMBER); addon=self.download_component("renodx_dlss",tmp,lambda x:self.prog(70+int(x*.15))); files=find_game_files(p); adest=os.path.dirname(files["reshade.ini"]) if "reshade.ini" in files else p
+            old=os.path.join(adest,"renodx-dlss5.addon64")
+            if os.path.isfile(old): shutil.move(old,old+f".backup_{datetime.now():%Y%m%d_%H%M%S}")
+            shutil.copy2(addon,os.path.join(adest,"renodx-dlss.addon64")); self.step("addon","✓ installed",GREEN); self.prog(90)
+            result=self.verify_install(p); self.step("verify","✓ verified" if result["ok"] else "⚠ warnings",GREEN if result["ok"] else AMBER); self.prog(100); self.set_status("Installation complete." if result["ok"] else "Installation completed with warnings.",GREEN if result["ok"] else AMBER)
+            self.log("Installation finished.")
+            self.after(0,lambda: messagebox.showinfo("Complete","DLSS Manager finished. A backup was created before changes."))
+        except Exception as e:
+            self.log(f"INSTALLATION ERROR: {e}"); self.set_status(f"Error: {e}",RED); self.after(0,lambda:messagebox.showerror("Install failed",str(e)))
         finally:
-            shutil.rmtree(temporary_dir, ignore_errors=True)
-            self.install_running = False
-            self.after(0, self._installation_finished)
+            shutil.rmtree(tmp,ignore_errors=True); self.running=False; self.after(0,lambda:self.install_btn.config(state="normal",text="INSTALL / UPDATE")); self.after(0,self.refresh_status)
 
-    def _installation_finished(self):
-        self.install_btn.config(state="normal", text="INSTALL / UPDATE")
-        self.restore_btn.config(state="normal")
-        self.verify_btn.config(state="normal")
-        self._refresh_installation_status()
+    def verify_install(self,p):
+        f=find_game_files(p); missing=[]
+        if not any(x in f for x in ("reshade.ini","reshade.log","dxgi.dll","d3d12.dll")): missing.append("ReShade files not detected")
+        if not any(x in f for x in ("nvngx_dlss.dll","nvngx.dll","sl.common.dll","sl.dlss.dll")): missing.append("DLSS runtime not detected")
+        if "nvngx_dlssnr.dll" not in f: missing.append("nvngx_dlssnr.dll not detected")
+        if "renodx-dlss.addon64" not in f: missing.append("renodx-dlss.addon64 not detected")
+        for x in missing:self.log("Missing: "+x)
+        return {"ok":not missing,"missing":missing,"files":f}
 
-    def _run_install(self, game_dir, temporary_dir):
-        self._set_step("backup", "creating...", AMBER)
-        self._set_status("Creating backup...")
-        self._set_progress(5)
-        backup_dir = self._create_backup(game_dir)
-        if not backup_dir:
-            raise RuntimeError("Backup could not be created.")
-        self._set_step("backup", "✓ created", GREEN)
-        self._set_progress(10)
-
-        self._set_step("reshade", "downloading...", AMBER)
-        self._set_status("Downloading ReShade...")
-        reshade_path = os.path.join(temporary_dir, "ReShade_Setup_6.8.0_Addon.exe")
-        self._download_and_verify(URL_RESHADE, reshade_path, EXPECTED_HASHES["ReShade_Setup_6.8.0_Addon.exe"],
-                                  lambda p: self._set_progress(10 + int(p * 0.15)))
-        self._install_reshade_safely(game_dir, reshade_path)
-
-        self._set_step("dlss", "downloading...", AMBER)
-        self._set_status("Downloading DLSS + Streamline...")
-        zip_path = os.path.join(temporary_dir, "DLSS_Streamline.zip")
-        self._download_and_verify(URL_DLSS_ZIP, zip_path, EXPECTED_HASHES["DLSS_Streamline.zip"],
-                                  lambda p: self._set_progress(30 + int(p * 0.20)))
-        files = find_game_files(game_dir)
-        dlss_destination = game_dir
-        for filename in ["nvngx_dlss.dll", "nvngx.dll", "sl.common.dll", "sl.dlss.dll"]:
-            if filename in files:
-                dlss_destination = os.path.dirname(files[filename])
-                break
-        self._log(f"DLSS destination: {dlss_destination}")
-        self._extract_zip(zip_path, dlss_destination)
-        self._set_step("dlss", "✓ installed", GREEN)
-        self._set_progress(55)
-
-        self._set_step("patch", "downloading...", AMBER)
-        self._set_status("Downloading patched DLSS-NR DLL...")
-        patch_path = os.path.join(temporary_dir, "nvngx_dlssnr.dll")
-        self._download_and_verify(URL_DLSS_PATCH, patch_path, EXPECTED_HASHES["nvngx_dlssnr.dll"],
-                                  lambda p: self._set_progress(55 + int(p * 0.15)))
-        patch_destination = os.path.join(dlss_destination, "nvngx_dlssnr.dll")
-        shutil.copy2(patch_path, patch_destination)
-        self._log(f"Installed: {patch_destination}")
-        self._set_step("patch", "✓ installed", GREEN)
-        self._set_progress(70)
-
-        self._set_step("addon", "downloading...", AMBER)
-        self._set_status("Downloading RenoDX DLSS addon...")
-        addon_path = os.path.join(temporary_dir, "renodx-dlss.addon64")
-        self._download_and_verify(URL_ADDON, addon_path, EXPECTED_HASHES["renodx-dlss.addon64"],
-                                  lambda p: self._set_progress(70 + int(p * 0.15)))
-        files = find_game_files(game_dir)
-        reshade_destination = os.path.dirname(files["reshade.ini"]) if "reshade.ini" in files else game_dir
-        if "reshade.ini" not in files:
-            self._log("ReShade.ini not found; using game directory.")
-        conflict = os.path.join(reshade_destination, "renodx-dlss5.addon64")
-        if os.path.isfile(conflict):
-            conflict_backup = unique_backup_name(conflict)
-            shutil.move(conflict, conflict_backup)
-            self._log(f"Moved conflicting addon to: {conflict_backup}")
-        addon_destination = os.path.join(reshade_destination, "renodx-dlss.addon64")
-        shutil.copy2(addon_path, addon_destination)
-        self._log(f"Installed: {addon_destination}")
-        self._set_step("addon", "✓ installed", GREEN)
-        self._set_progress(90)
-
-        self._set_step("verify", "checking...", AMBER)
-        self._set_status("Verifying installation...")
-        verification = self._verify_installation(game_dir)
-        if not verification["ok"]:
-            self._set_step("verify", "⚠ warnings", AMBER)
-            self._set_progress(95)
-            details = "\n".join("• " + item for item in verification["missing"])
-            self._set_status("Installation completed with warnings.", AMBER)
-            self._log("Verification warnings:")
-            for item in verification["missing"]:
-                self._log(f"Missing: {item}")
-            self.after(0, lambda: messagebox.showwarning("Installation completed with warnings",
-                f"Some components were not detected:\n\n{details}\n\nYou may need to finish configuring ReShade manually."))
-        else:
-            self._set_step("verify", "✓ verified", GREEN)
-            self._set_progress(100)
-            self._set_status("Installation complete and verified.", GREEN)
-            self._log("Installation successfully verified.")
-            self.after(0, self._show_done)
-
-    def _verify_installation(self, game_dir):
-        files = find_game_files(game_dir)
-        missing = []
-        if "reshade.ini" not in files and "reshade.log" not in files:
-            missing.append("ReShade configuration/log not detected")
-        if not any(item in files for item in ["nvngx_dlss.dll", "nvngx.dll"]):
-            missing.append("DLSS runtime not detected")
-        if "nvngx_dlssnr.dll" not in files:
-            missing.append("nvngx_dlssnr.dll not detected")
-        if "renodx-dlss.addon64" not in files:
-            missing.append("renodx-dlss.addon64 not detected")
-        return {"ok": not missing, "missing": missing, "files": files}
-
-    def _verify_clicked(self):
-        game_dir = self.game_path.get().strip()
-        if not game_dir or not os.path.isdir(game_dir):
-            messagebox.showerror("Invalid path", "Set a valid Spider-Man 2 directory first.")
-            return
-        result = self._verify_installation(game_dir)
-        if result["ok"]:
-            self._set_status("Installation verified successfully.", GREEN)
-            messagebox.showinfo("Verification successful", "All expected components were detected.")
-        else:
-            missing = "\n".join("• " + item for item in result["missing"])
-            self._set_status("Verification found missing components.", AMBER)
-            messagebox.showwarning("Verification", "Some components were not detected:\n\n" + missing)
-        self._refresh_installation_status()
-
-    def _show_done(self):
-        messagebox.showinfo("Installation complete",
-            "DLSS Manager finished successfully.\n\nRecommended next steps:\n\n"
-            "1. Launch Spider-Man 2.\n2. Press INS to open ReShade.\n"
-            "3. Configure the RenoDX DLSS addon.\n\nA backup was created before installation.\n"
-            "Use 'Restore backup' if you need to revert.")
+    def verify_clicked(self):
+        p=self.game_path.get().strip()
+        if not os.path.isdir(p): messagebox.showerror("Invalid path","Set a valid Spider-Man 2 directory first."); return
+        r=self.verify_install(p); self.refresh_status()
+        if r["ok"]: messagebox.showinfo("Verification","All expected components were detected.")
+        else: messagebox.showwarning("Verification","Missing:\n\n"+"\n".join("• "+x for x in r["missing"]))
 
 
 if __name__ == "__main__":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        pass
-    app = DLSSManager()
-    app.mainloop()
+    try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception: pass
+    DLSSManager().mainloop()
