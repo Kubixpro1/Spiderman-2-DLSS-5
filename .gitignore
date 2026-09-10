@@ -6,6 +6,7 @@ __pycache__/
 venv/
 dist/
 build/
+obfuscated/
 *.spec
 *.log
 *.tmp
