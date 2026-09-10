@@ -1,28 +1,16 @@
 # Source
 
-Place the current `DLSS5Manager.py` source here.
+- `DLSS5Manager.py` — main Tkinter application
+- `updater.py` — packaged-EXE self-update helper
 
-The application should load component metadata from:
+The manager loads component metadata from `config/components.json` and update metadata from `config/version.json` at runtime.
 
-```text
-https://raw.githubusercontent.com/Kubixpro1/Spiderman-2-DLSS-5/main/config/components.json
+The application intentionally does not embed verified SHA-256 values until the exact binaries have been independently checked. Blank hashes are treated as unavailable verification, never as proof of trust.
+
+For a release build, GitHub Actions runs PyInstaller with:
+
+```powershell
+pyinstaller --clean --noconfirm --onefile --windowed --name DLSS5Manager src/DLSS5Manager.py
 ```
 
-and application update metadata from:
-
-```text
-https://raw.githubusercontent.com/Kubixpro1/Spiderman-2-DLSS-5/main/config/version.json
-```
-
-Recommended update flow:
-
-1. Fetch `version.json` over HTTPS.
-2. Compare the remote semantic version with the local version.
-3. Download the new executable to a temporary file.
-4. Verify SHA-256.
-5. Verify the Authenticode signature where available.
-6. Start a small updater helper.
-7. Exit the current application.
-8. Replace the old executable and restart it.
-
-The manager should never trust a downloaded executable or DLL solely because the URL is reachable.
+The resulting asset is `DLSS5Manager.exe`.
